@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Smart Security System — ESP32 Demo</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Exo+2:wght@300;400;600;800&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --bg:       #080c10;
+    --panel:    #0d1520;
+    --border:   #1a2e44;
+    --green:    #00ff88;
+    --red:      #ff3355;
+    --yellow:   #ffcc00;
+    --blue:     #00aaff;
+    --orange:   #ff7722;
+    --dim:      #3a5068;
+    --text:     #c8dde8;
+    --mono:     'Share Tech Mono', monospace;
+    --sans:     'Exo 2', sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Grid noise overlay ── */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(0,255,136,.015) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,255,136,.015) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none; z-index: 0;
+  }
+
+  /* ── Scanline effect ── */
+  body::after {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,.08) 2px,
+      rgba(0,0,0,.08) 4px
+    );
+    pointer-events: none; z-index: 1;
+  }
+
+  .wrapper { position: relative; z-index: 2; max-width: 1100px; margin: 0 auto; padding: 0 20px 60px; }
+
+  /* ── Header ── */
+  header {
+    padding: 36px 0 24px;
+    display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .logo-block h1 {
+    font-family: var(--mono); font-size: clamp(1.1rem, 3vw, 1.6rem); color: var(--green);
+    letter-spacing: .08em; text-shadow: 0 0 20px rgba(0,255,136,.5);
+  }
+  .logo-block p { font-size: .8rem; color: var(--dim); margin-top: 4px; letter-spacing: .06em; }
+  .status-badge {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--panel); border: 1px solid var(--border);
+    padding: 8px 16px; border-radius: 4px; font-family: var(--mono); font-size: .8rem;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{box-shadow:0 0 0 0 rgba(0,255,136,.4)} 50%{box-shadow:0 0 0 6px rgba(0,255,136,0)} }
+
+  /* ── LCD Display ── */
+  .lcd-wrap { margin: 28px 0 0; display: flex; justify-content: center; }
+  .lcd {
+    background: #0a1f0a;
+    border: 3px solid #1a3a1a;
+    border-radius: 8px;
+    padding: 16px 24px;
+    font-family: var(--mono);
+    box-shadow: 0 0 40px rgba(0,255,136,.15), inset 0 0 20px rgba(0,0,0,.5);
+    min-width: 320px; text-align: center;
+  }
+  .lcd-row {
+    font-size: 1.35rem; letter-spacing: .15em;
+    color: #00ff88; text-shadow: 0 0 8px rgba(0,255,136,.8);
+    height: 1.8em; display: flex; align-items: center; justify-content: center;
+    transition: all .3s;
+  }
+  .lcd-label { font-size: .65rem; color: var(--dim); letter-spacing: .1em; margin-top: 10px; }
+
+  /* ── Sensor Grid ── */
+  .section-title {
+    font-family: var(--mono); font-size: .7rem; color: var(--dim);
+    letter-spacing: .15em; text-transform: uppercase;
+    margin: 32px 0 14px; display: flex; align-items: center; gap: 10px;
+  }
+  .section-title::after { content:''; flex:1; height:1px; background:var(--border); }
+
+  .sensor-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+
+  .sensor-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 20px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color .3s, box-shadow .3s;
+  }
+  .sensor-card.alert {
+    border-color: var(--red);
+    box-shadow: 0 0 20px rgba(255,51,85,.25);
+    animation: cardPulse 1s ease-in-out infinite;
+  }
+  @keyframes cardPulse { 50% { box-shadow: 0 0 35px rgba(255,51,85,.4); } }
+  .sensor-card.safe  { border-color: #1a3a2a; }
+  .sensor-card.warn  { border-color: var(--yellow); box-shadow: 0 0 16px rgba(255,204,0,.2); }
+
+  .sensor-card::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    background: var(--dim); transition: background .3s;
+  }
+  .sensor-card.alert::before { background: var(--red); }
+  .sensor-card.safe::before  { background: var(--green); }
+  .sensor-card.warn::before  { background: var(--yellow); }
+
+  .sensor-icon { font-size: 2rem; margin-bottom: 12px; }
+  .sensor-name { font-size: .7rem; color: var(--dim); letter-spacing: .12em; font-family: var(--mono); }
+  .sensor-value {
+    font-family: var(--mono); font-size: 1.8rem; font-weight: bold;
+    margin: 6px 0 2px; color: var(--text); transition: color .3s;
+  }
+  .sensor-card.alert .sensor-value { color: var(--red); text-shadow: 0 0 10px rgba(255,51,85,.6); }
+  .sensor-card.safe  .sensor-value { color: var(--green); }
+  .sensor-card.warn  .sensor-value { color: var(--yellow); }
+  .sensor-sub { font-size: .72rem; color: var(--dim); }
+
+  /* ── Gas bar ── */
+  .gas-bar-wrap { margin-top: 10px; }
+  .gas-bar-bg { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+  .gas-bar-fill {
+    height: 100%; border-radius: 2px;
+    background: linear-gradient(90deg, var(--green), var(--yellow), var(--red));
+    transition: width .5s ease;
+  }
+
+  /* ── RGB LED visual ── */
+  .led-visual {
+    width: 36px; height: 36px; border-radius: 50%;
+    margin: 10px auto 0;
+    transition: background .4s, box-shadow .4s;
+  }
+  .led-green { background: #00ff88; box-shadow: 0 0 20px #00ff88, 0 0 40px rgba(0,255,136,.4); }
+  .led-red   { background: #ff3355; box-shadow: 0 0 20px #ff3355, 0 0 40px rgba(255,51,85,.4); animation: ledBlink .5s infinite; }
+  .led-blue  { background: #00aaff; box-shadow: 0 0 20px #00aaff, 0 0 40px rgba(0,170,255,.4); }
+  .led-off   { background: #1a2a1a; box-shadow: none; }
+  @keyframes ledBlink { 50% { opacity: .3; } }
+
+  /* ── Controls ── */
+  .controls { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 14px; }
+  .btn {
+    flex: 1; min-width: 120px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--mono); font-size: .8rem;
+    letter-spacing: .1em; padding: 10px 16px;
+    border-radius: 4px; cursor: pointer;
+    text-transform: uppercase;
+    transition: all .2s;
+  }
+  .btn:hover { border-color: var(--blue); color: var(--blue); box-shadow: 0 0 12px rgba(0,170,255,.2); }
+  .btn.danger { border-color: var(--red); color: var(--red); }
+  .btn.danger:hover { background: rgba(255,51,85,.1); }
+  .btn.success { border-color: var(--green); color: var(--green); }
+  .btn.success:hover { background: rgba(0,255,136,.1); }
+  .btn.primary { border-color: var(--blue); color: var(--blue); }
+  .btn.primary:hover { background: rgba(0,170,255,.1); }
+
+  /* ── RFID card ── */
+  .rfid-card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 6px; padding: 20px;
+  }
+  .rfid-scanner {
+    display: flex; align-items: center; gap: 14px;
+    background: #0a1520; border: 1px dashed var(--border);
+    border-radius: 6px; padding: 16px; margin: 14px 0; cursor: pointer;
+    transition: border-color .3s;
+  }
+  .rfid-scanner:hover { border-color: var(--blue); }
+  .rfid-icon { font-size: 2rem; }
+  .rfid-text { font-family: var(--mono); font-size: .75rem; color: var(--dim); }
+  .rfid-text strong { display: block; color: var(--text); margin-bottom: 2px; }
+  .rfid-result {
+    font-family: var(--mono); font-size: .8rem; padding: 8px 12px;
+    border-radius: 4px; text-align: center; display: none;
+    animation: fadeIn .3s ease;
+  }
+  .rfid-result.granted { background: rgba(0,255,136,.1); color: var(--green); border: 1px solid rgba(0,255,136,.3); }
+  .rfid-result.denied  { background: rgba(255,51,85,.1);  color: var(--red);   border: 1px solid rgba(255,51,85,.3); }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:none} }
+
+  /* ── Alert Log ── */
+  .log-wrap {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 6px; overflow: hidden;
+  }
+  .log-header {
+    background: #0a1018; padding: 10px 16px;
+    font-family: var(--mono); font-size: .7rem; color: var(--dim);
+    letter-spacing: .1em; display: flex; justify-content: space-between;
+  }
+  .log-body { max-height: 180px; overflow-y: auto; padding: 8px 0; }
+  .log-body::-webkit-scrollbar { width: 4px; }
+  .log-body::-webkit-scrollbar-track { background: var(--panel); }
+  .log-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .log-entry {
+    display: flex; align-items: flex-start; gap: 12px;
+    padding: 6px 16px; font-family: var(--mono); font-size: .72rem;
+    border-bottom: 1px solid rgba(26,46,68,.5);
+    animation: slideIn .3s ease;
+  }
+  @keyframes slideIn { from{opacity:0;transform:translateX(-8px)} to{opacity:1;transform:none} }
+  .log-time { color: var(--dim); min-width: 60px; }
+  .log-tag { padding: 1px 6px; border-radius: 2px; font-size: .65rem; letter-spacing: .08em; flex-shrink:0; }
+  .tag-fire   { background: rgba(255,51,85,.2);  color: var(--red); }
+  .tag-gas    { background: rgba(255,204,0,.2);  color: var(--yellow); }
+  .tag-motion { background: rgba(0,170,255,.2);  color: var(--blue); }
+  .tag-rfid   { background: rgba(0,255,136,.15); color: var(--green); }
+  .tag-system { background: rgba(100,100,100,.2);color: var(--dim); }
+  .log-msg { color: var(--text); }
+
+  /* ── Buzzer visual ── */
+  .buzzer-wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .buzzer-rings { position: relative; width: 60px; height: 60px; margin: 0 auto; }
+  .buzzer-core {
+    position: absolute; inset: 0; margin: auto;
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--dim); transition: background .3s;
+  }
+  .buzzer-core.on { background: var(--orange); box-shadow: 0 0 16px var(--orange); }
+  .ring {
+    position: absolute; border-radius: 50%; border: 2px solid var(--dim);
+    opacity: 0; transition: border-color .3s;
+  }
+  .ring1 { inset: 8px; }
+  .ring2 { inset: 0; }
+  .ring.on {
+    border-color: var(--orange);
+    animation: ringPulse 1s infinite;
+  }
+  .ring1.on { animation-delay: 0s; }
+  .ring2.on { animation-delay: .2s; }
+  @keyframes ringPulse { 0%{opacity:0;transform:scale(.8)} 50%{opacity:.8} 100%{opacity:0;transform:scale(1.1)} }
+
+  /* ── Q&A Section ── */
+  .qa-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin-top: 14px; }
+  .qa-card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 6px; padding: 18px; cursor: pointer;
+    transition: border-color .2s;
+  }
+  .qa-card:hover { border-color: var(--blue); }
+  .qa-q { font-size: .85rem; font-weight: 600; color: var(--text); margin-bottom: 0; }
+  .qa-a {
+    font-size: .8rem; color: var(--dim); margin-top: 10px;
+    line-height: 1.6; display: none;
+  }
+  .qa-card.open .qa-a { display: block; }
+  .qa-card.open { border-color: var(--green); }
+  .qa-toggle { float: right; color: var(--dim); font-size: 1rem; transition: transform .3s; }
+  .qa-card.open .qa-toggle { transform: rotate(45deg); color: var(--green); }
+
+  /* ── Footer ── */
+  footer {
+    margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--border);
+    text-align: center; font-family: var(--mono); font-size: .7rem; color: var(--dim);
+  }
+  footer a { color: var(--blue); text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="wrapper">
+
+  <!-- Header -->
+  <header>
+    <div class="logo-block">
+      <h1>⚡ SMART SECURITY SYSTEM</h1>
+      <p>ESP32 · PIR · MQ2 · FLAME · RFID · WiFi  //  INTERACTIVE DEMO</p>
+    </div>
+    <div class="status-badge">
+      <div class="dot" id="systemDot"></div>
+      <span id="systemStatus" style="font-family:var(--mono)">ARMED &amp; READY</span>
+    </div>
+  </header>
+
+  <!-- LCD -->
+  <div class="lcd-wrap">
+    <div class="lcd">
+      <div class="lcd-row" id="lcdRow1">✓ SYSTEM  SAFE ✓</div>
+      <div class="lcd-row" id="lcdRow2">  ARMED &amp; READY  </div>
+      <div class="lcd-label">LCD 1602 — I2C (SDA: GPIO21 · SCL: GPIO22)</div>
+    </div>
+  </div>
+
+  <!-- Sensors -->
+  <div class="section-title">// SENSOR READINGS</div>
+  <div class="sensor-grid">
+
+    <!-- PIR -->
+    <div class="sensor-card safe" id="pirCard">
+      <div class="sensor-icon">🚶</div>
+      <div class="sensor-name">PIR MOTION · GPIO 13</div>
+      <div class="sensor-value" id="pirVal">NO MOTION</div>
+      <div class="sensor-sub">HC-SR501 · Digital Output</div>
+    </div>
+
+    <!-- MQ2 -->
+    <div class="sensor-card safe" id="mq2Card">
+      <div class="sensor-icon">💨</div>
+      <div class="sensor-name">MQ2 GAS · GPIO 34 (ADC)</div>
+      <div class="sensor-value" id="mq2Val">142</div>
+      <div class="sensor-sub" id="mq2Sub">Normal — Threshold: 500</div>
+      <div class="gas-bar-wrap">
+        <div class="gas-bar-bg">
+          <div class="gas-bar-fill" id="gasBar" style="width:3.5%"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Flame -->
+    <div class="sensor-card safe" id="flameCard">
+      <div class="sensor-icon">🔥</div>
+      <div class="sensor-name">FLAME SENSOR · GPIO 27</div>
+      <div class="sensor-value" id="flameVal">NO FLAME</div>
+      <div class="sensor-sub">IR · 760–1100 nm · Active LOW</div>
+    </div>
+
+    <!-- RGB LED -->
+    <div class="sensor-card safe" id="ledCard">
+      <div class="sensor-icon">🌈</div>
+      <div class="sensor-name">RGB LED STATUS</div>
+      <div class="sensor-value" id="ledVal">SAFE</div>
+      <div class="sensor-sub">R:GPIO14 · G:GPIO12 · B:GPIO25</div>
+      <div class="led-visual led-green" id="ledVisual"></div>
+    </div>
+
+    <!-- Buzzer -->
+    <div class="sensor-card safe" id="buzzerCard">
+      <div class="sensor-icon">🔊</div>
+      <div class="sensor-name">PASSIVE BUZZER · GPIO 26</div>
+      <div class="sensor-value" id="buzzerVal">SILENT</div>
+      <div class="buzzer-wrap">
+        <div class="buzzer-rings">
+          <div class="buzzer-core" id="buzzerCore"></div>
+          <div class="ring ring1" id="ring1"></div>
+          <div class="ring ring2" id="ring2"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- WiFi -->
+    <div class="sensor-card safe" id="wifiCard">
+      <div class="sensor-icon">📡</div>
+      <div class="sensor-name">WiFi STATUS</div>
+      <div class="sensor-value" id="wifiVal" style="font-size:1.1rem">CONNECTED</div>
+      <div class="sensor-sub" id="wifiSub">192.168.1.42 · Blynk Active</div>
+    </div>
+
+  </div>
+
+  <!-- Simulate Controls -->
+  <div class="section-title">// SIMULATE EVENTS</div>
+  <div class="controls">
+    <button class="btn danger" onclick="triggerMotion()">🚶 Trigger Motion</button>
+    <button class="btn warn" onclick="triggerGas()" style="border-color:#ffcc00;color:#ffcc00">💨 Trigger Gas Leak</button>
+    <button class="btn danger" onclick="triggerFire()">🔥 Trigger Fire</button>
+    <button class="btn success" onclick="clearAll()">✓ All Clear</button>
+  </div>
+
+  <!-- RFID -->
+  <div class="section-title">// RFID ACCESS CONTROL</div>
+  <div class="rfid-card">
+    <div style="font-size:.85rem; color:var(--dim); margin-bottom:4px; font-family:var(--mono)">RC522 · SPI · SS:GPIO5 · SCK:18 · MOSI:23 · MISO:19 · RST:22</div>
+    <div class="rfid-scanner" onclick="scanRFID('auth')">
+      <div class="rfid-icon">🔑</div>
+      <div class="rfid-text"><strong>SCAN AUTHORIZED CARD</strong>Tap to simulate authorized RFID card</div>
+    </div>
+    <div class="rfid-scanner" onclick="scanRFID('deny')" style="border-color:rgba(255,51,85,.3)">
+      <div class="rfid-icon">❌</div>
+      <div class="rfid-text"><strong>SCAN UNKNOWN CARD</strong>Tap to simulate unauthorized RFID card</div>
+    </div>
+    <div class="rfid-result" id="rfidResult"></div>
+  </div>
+
+  <!-- Alert Log -->
+  <div class="section-title">// SERIAL MONITOR / ALERT LOG</div>
+  <div class="log-wrap">
+    <div class="log-header">
+      <span>LIVE EVENT LOG — 115200 BAUD</span>
+      <span id="logCount">0 events</span>
+    </div>
+    <div class="log-body" id="logBody"></div>
+  </div>
+
+  <!-- Wiring Diagram (SVG inline) -->
+  <div class="section-title">// CIRCUIT WIRING OVERVIEW</div>
+  <div style="background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:20px;overflow-x:auto">
+    <svg viewBox="0 0 820 360" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:820px;display:block;margin:0 auto;font-family:'Share Tech Mono',monospace">
+      <!-- ESP32 center -->
+      <rect x="300" y="120" width="220" height="140" rx="8" fill="#0d1a2a" stroke="#1a5276" stroke-width="2"/>
+      <text x="410" y="145" fill="#00aaff" font-size="12" text-anchor="middle" font-weight="bold">ESP32 DevKit</text>
+      <text x="410" y="160" fill="#3a5068" font-size="9" text-anchor="middle">ESP-WROOM-32</text>
+      <!-- GPIO labels left -->
+      <text x="308" y="185" fill="#c8dde8" font-size="8">GPIO13 ←PIR</text>
+      <text x="308" y="200" fill="#c8dde8" font-size="8">GPIO34 ←MQ2</text>
+      <text x="308" y="215" fill="#c8dde8" font-size="8">GPIO27 ←FLAME</text>
+      <text x="308" y="230" fill="#c8dde8" font-size="8">GPIO21 SDA→LCD</text>
+      <text x="308" y="245" fill="#c8dde8" font-size="8">GPIO22 SCL/RST</text>
+      <!-- GPIO labels right -->
+      <text x="512" y="185" fill="#c8dde8" font-size="8" text-anchor="end">BUZZER→ GPIO26</text>
+      <text x="512" y="200" fill="#c8dde8" font-size="8" text-anchor="end">LED-R → GPIO14</text>
+      <text x="512" y="215" fill="#c8dde8" font-size="8" text-anchor="end">LED-G → GPIO12</text>
+      <text x="512" y="230" fill="#c8dde8" font-size="8" text-anchor="end">LED-B → GPIO25</text>
+      <text x="512" y="245" fill="#c8dde8" font-size="8" text-anchor="end">RFID SS→ GPIO5</text>
+
+      <!-- PIR -->
+      <rect x="30" y="60" width="120" height="50" rx="5" fill="#0a1520" stroke="#00aaff" stroke-width="1.5"/>
+      <text x="90" y="80" fill="#00aaff" font-size="10" text-anchor="middle" font-weight="bold">PIR HC-SR501</text>
+      <text x="90" y="96" fill="#3a5068" font-size="8" text-anchor="middle">Motion Sensor</text>
+      <line x1="150" y1="85" x2="300" y2="182" stroke="#00aaff" stroke-width="1" stroke-dasharray="4,3"/>
+
+      <!-- MQ2 -->
+      <rect x="30" y="135" width="120" height="50" rx="5" fill="#0a1520" stroke="#ffcc00" stroke-width="1.5"/>
+      <text x="90" y="155" fill="#ffcc00" font-size="10" text-anchor="middle" font-weight="bold">MQ-2 Gas</text>
+      <text x="90" y="171" fill="#3a5068" font-size="8" text-anchor="middle">Analog A0 → ADC</text>
+      <line x1="150" y1="160" x2="300" y2="197" stroke="#ffcc00" stroke-width="1" stroke-dasharray="4,3"/>
+
+      <!-- Flame -->
+      <rect x="30" y="210" width="120" height="50" rx="5" fill="#0a1520" stroke="#ff3355" stroke-width="1.5"/>
+      <text x="90" y="230" fill="#ff3355" font-size="10" text-anchor="middle" font-weight="bold">Flame Sensor</text>
+      <text x="90" y="246" fill="#3a5068" font-size="8" text-anchor="middle">IR · Digital OUT</text>
+      <line x1="150" y1="235" x2="300" y2="212" stroke="#ff3355" stroke-width="1" stroke-dasharray="4,3"/>
+
+      <!-- LCD -->
+      <rect x="30" y="285" width="120" height="50" rx="5" fill="#0a1520" stroke="#00ff88" stroke-width="1.5"/>
+      <text x="90" y="305" fill="#00ff88" font-size="10" text-anchor="middle" font-weight="bold">LCD 1602 I2C</text>
+      <text x="90" y="321" fill="#3a5068" font-size="8" text-anchor="middle">SDA/SCL</text>
+      <line x1="150" y1="310" x2="300" y2="240" stroke="#00ff88" stroke-width="1" stroke-dasharray="4,3"/>
+
+      <!-- Buzzer -->
+      <rect x="670" y="60" width="120" height="50" rx="5" fill="#0a1520" stroke="#ff7722" stroke-width="1.5"/>
+      <text x="730" y="80" fill="#ff7722" font-size="10" text-anchor="middle" font-weight="bold">Buzzer</text>
+      <text x="730" y="96" fill="#3a5068" font-size="8" text-anchor="middle">5V Passive</text>
+      <line x1="670" y1="85" x2="520" y2="182" stroke="#ff7722" stroke-width="1" stroke-dasharray="4,3"/>
+
+      <!-- RGB LED -->
+      <rect x="670" y="135" width="120" height="50" rx="5" fill="#0a1520" stroke="#aa44ff" stroke-width="1.5"/>
+      <text x="730" y="155" fill="#aa44ff" font-size="10" text-anchor="middle" font-weight="bold">RGB LED</text>
+      <text x="730" y="171" fill="#3a5068" font-size="8" text-anchor="middle">R/G/B + 220Ω</text>
+      <line x1="670" y1="160" x2="520" y2="210" stroke="#aa44ff" stroke-width="1" stroke-dasharray="4,3"/>
+
+      <!-- RFID -->
+      <rect x="670" y="210" width="120" height="50" rx="5" fill="#0a1520" stroke="#00aaff" stroke-width="1.5"/>
+      <text x="730" y="230" fill="#00aaff" font-size="10" text-anchor="middle" font-weight="bold">RFID RC522</text>
+      <text x="730" y="246" fill="#3a5068" font-size="8" text-anchor="middle">SPI Bus</text>
+      <line x1="670" y1="235" x2="520" y2="240" stroke="#00aaff" stroke-width="1" stroke-dasharray="4,3"/>
+
+      <!-- WiFi cloud -->
+      <ellipse cx="410" cy="50" rx="60" ry="28" fill="#0a1520" stroke="#00aaff" stroke-width="1.5" stroke-dasharray="5,3"/>
+      <text x="410" y="46" fill="#00aaff" font-size="10" text-anchor="middle" font-weight="bold">WiFi</text>
+      <text x="410" y="60" fill="#3a5068" font-size="8" text-anchor="middle">Blynk / IFTTT</text>
+      <line x1="410" y1="78" x2="410" y2="120" stroke="#00aaff" stroke-width="1" stroke-dasharray="4,3"/>
+
+      <!-- SPI bus note -->
+      <text x="410" y="280" fill="#3a5068" font-size="8" text-anchor="middle">SPI: SCK=18 · MOSI=23 · MISO=19  |  I2C: SDA=21 · SCL=22</text>
+      <text x="410" y="295" fill="#3a5068" font-size="8" text-anchor="middle">Power: VCC=5V · RFID+LCD=3.3V · GND=GND</text>
+    </svg>
+  </div>
+
+  <!-- Q&A -->
+  <div class="section-title">// VIVA Q&amp;A</div>
+  <div class="qa-grid" id="qaGrid"></div>
+
+  <footer>
+    <p>IoT Smart Security System · ESP32 Project · MIT License</p>
+    <p style="margin-top:6px">
+      <a href="https://github.com/yourusername/smart-security-esp32">GitHub Repo</a>
+      &nbsp;·&nbsp;
+      <a href="https://github.com/yourusername/smart-security-esp32/blob/main/src/smart_security.ino">View Code</a>
+      &nbsp;·&nbsp;
+      <a href="https://docs.arduino.cc/hardware/uno-rev3">Arduino Docs</a>
+    </p>
+  </footer>
+
+</div>
+
+<script>
+  // ── State ────────────────────────────────────────────────────
+  let armed = true;
+  let logCount = 0;
+
+  const qa = [
+    { q: "Why ESP32 instead of Arduino UNO?",
+      a: "ESP32 has built-in WiFi + Bluetooth, a 240 MHz dual-core CPU, 34 GPIO pins, and multiple ADC channels. Arduino UNO has no networking, only 6 analog pins, and runs at 16 MHz — insufficient for IoT applications." },
+    { q: "Why is GPIO34 used for MQ2 analog input?",
+      a: "GPIO34 is an ADC1 channel. ADC2 pins (GPIO25–27) conflict with WiFi when it's active, causing inaccurate readings. Always use ADC1 pins (GPIO32–39) for analog sensing alongside WiFi." },
+    { q: "Why does flame sensor output LOW when fire is detected?",
+      a: "Most IR flame modules use active-low logic — the output pulls LOW when the IR photodiode detects the 760–1100 nm wavelength emitted by flames. The firmware checks: if (FLAME_PIN == LOW) → fire detected." },
+    { q: "Why I2C for the LCD instead of parallel?",
+      a: "Parallel LCD uses 6+ GPIO pins. I2C requires only SDA + SCL (2 pins total), saving 4+ GPIOs for sensors. The I2C module (PCF8574) handles the 8-bit bus internally at address 0x27 or 0x3F." },
+    { q: "How does RFID authentication work?",
+      a: "The RC522 module reads a card's unique 4-byte UID via SPI. The firmware stores authorized UIDs as strings, compares the scanned UID hex value, and toggles the armed/disarmed state on a match. Unmatched UIDs trigger the alarm." },
+    { q: "What prevents false alarms from PIR?",
+      a: "A 5-second ALERT_COOLDOWN prevents repeated triggers. PIR sensitivity and time-delay potentiometers are adjustable. The 60-second warm-up period at startup also prevents spurious triggers during calibration." },
+    { q: "Why use a passive buzzer over active?",
+      a: "A passive buzzer requires a PWM signal (tone()) and can produce different frequencies — enabling distinct alarm tones for fire (fast, 1200 Hz), gas (200 ms interval, 800 Hz), and motion alerts, unlike active buzzers that emit only one tone." },
+    { q: "How is the gas threshold calibrated?",
+      a: "MQ2 needs 2–3 minutes warm-up. In clean air it reads ~100–300 ADC (0–4095 scale). The threshold is set at 500, between clean-air baseline and smoke/gas exposure levels. Adjust higher in kitchens to reduce false alarms." },
+  ];
+
+  // ── Render Q&A ───────────────────────────────────────────────
+  const qaGrid = document.getElementById('qaGrid');
+  qa.forEach((item, i) => {
+    const card = document.createElement('div');
+    card.className = 'qa-card';
+    card.innerHTML = `<div class="qa-q"><span class="qa-toggle">+</span>Q${i+1}: ${item.q}</div>
+      <div class="qa-a">${item.a}</div>`;
+    card.onclick = () => card.classList.toggle('open');
+    qaGrid.appendChild(card);
+  });
+
+  // ── Logging ──────────────────────────────────────────────────
+  function addLog(tag, tagClass, msg) {
+    logCount++;
+    const now = new Date();
+    const t = String(now.getHours()).padStart(2,'0') + ':' +
+              String(now.getMinutes()).padStart(2,'0') + ':' +
+              String(now.getSeconds()).padStart(2,'0');
+    const body = document.getElementById('logBody');
+    const entry = document.createElement('div');
+    entry.className = 'log-entry';
+    entry.innerHTML = `<span class="log-time">${t}</span>
+      <span class="log-tag ${tagClass}">${tag}</span>
+      <span class="log-msg">${msg}</span>`;
+    body.prepend(entry);
+    document.getElementById('logCount').textContent = logCount + ' events';
+  }
+
+  // ── LCD Update ───────────────────────────────────────────────
+  function setLCD(r1, r2) {
+    document.getElementById('lcdRow1').textContent = r1;
+    document.getElementById('lcdRow2').textContent = r2;
+  }
+
+  // ── LED ──────────────────────────────────────────────────────
+  function setLED(color, label) {
+    const v = document.getElementById('ledVisual');
+    v.className = 'led-visual led-' + color;
+    document.getElementById('ledVal').textContent = label;
+    const lc = document.getElementById('ledCard');
+    lc.className = 'sensor-card ' + (color === 'green' ? 'safe' : color === 'red' ? 'alert' : 'safe');
+  }
+
+  // ── Buzzer ───────────────────────────────────────────────────
+  function setBuzzer(on, label) {
+    document.getElementById('buzzerCore').className = 'buzzer-core' + (on ? ' on' : '');
+    document.getElementById('ring1').className = 'ring ring1' + (on ? ' on' : '');
+    document.getElementById('ring2').className = 'ring ring2' + (on ? ' on' : '');
+    document.getElementById('buzzerVal').textContent = label || (on ? 'ALARM!' : 'SILENT');
+    document.getElementById('buzzerCard').className = 'sensor-card ' + (on ? 'alert' : 'safe');
+  }
+
+  // ── Status header ─────────────────────────────────────────────
+  function setStatus(text, color) {
+    document.getElementById('systemStatus').textContent = text;
+    document.getElementById('systemDot').style.background = color;
+  }
+
+  // ── Clear All ────────────────────────────────────────────────
+  function clearAll() {
+    document.getElementById('pirCard').className = 'sensor-card safe';
+    document.getElementById('pirVal').textContent = 'NO MOTION';
+    document.getElementById('mq2Card').className = 'sensor-card safe';
+    document.getElementById('mq2Val').textContent = '142';
+    document.getElementById('mq2Sub').textContent = 'Normal — Threshold: 500';
+    document.getElementById('gasBar').style.width = '3.5%';
+    document.getElementById('flameCard').className = 'sensor-card safe';
+    document.getElementById('flameVal').textContent = 'NO FLAME';
+    setLED('green', 'SAFE');
+    setBuzzer(false);
+    setLCD('✓ SYSTEM  SAFE ✓', '  ARMED & READY  ');
+    setStatus('ARMED & READY', 'var(--green)');
+    addLog('SYSTEM', 'tag-system', 'All clear — system nominal.');
+  }
+
+  // ── Motion ───────────────────────────────────────────────────
+  function triggerMotion() {
+    if (!armed) { addLog('PIR', 'tag-motion', 'System disarmed — motion ignored.'); return; }
+    document.getElementById('pirCard').className = 'sensor-card alert';
+    document.getElementById('pirVal').textContent = 'MOTION!';
+    setLED('red', 'ALERT');
+    setBuzzer(true, 'INTERMITTENT');
+    setLCD('⚠ INTRUDER ALERT', '  MOTION DETECT!');
+    setStatus('INTRUDER ALERT', 'var(--red)');
+    addLog('PIR', 'tag-motion', '[GPIO13 HIGH] Motion detected → Alarm activated. WiFi alert sent.');
+  }
+
+  // ── Gas ──────────────────────────────────────────────────────
+  function triggerGas() {
+    if (!armed) { addLog('MQ2', 'tag-gas', 'System disarmed — gas alert ignored.'); return; }
+    const level = 720 + Math.floor(Math.random() * 200);
+    document.getElementById('mq2Card').className = 'sensor-card alert';
+    document.getElementById('mq2Val').textContent = level;
+    document.getElementById('mq2Sub').textContent = `DANGER — Threshold: 500`;
+    document.getElementById('gasBar').style.width = Math.min((level/4095)*100, 100) + '%';
+    setLED('red', 'ALERT');
+    setBuzzer(true, 'FAST BEEP');
+    setLCD('!! GAS LEAK !!  ', `LVL:${level} DANGER!`);
+    setStatus('GAS ALERT', 'var(--yellow)');
+    addLog('MQ2', 'tag-gas', `[GPIO34 ADC=${level}] Gas leak detected → Alarm + WiFi alert.`);
+  }
+
+  // ── Fire ─────────────────────────────────────────────────────
+  function triggerFire() {
+    if (!armed) { addLog('FLAME', 'tag-fire', 'System disarmed — fire alert ignored.'); return; }
+    document.getElementById('flameCard').className = 'sensor-card alert';
+    document.getElementById('flameVal').textContent = 'FIRE!!';
+    setLED('red', 'FIRE!');
+    setBuzzer(true, 'CONTINUOUS');
+    setLCD('*** FIRE ALERT **', ' EVACUATE NOW!  ');
+    setStatus('🔥 FIRE ALERT', 'var(--red)');
+    addLog('FLAME', 'tag-fire', '[GPIO27 LOW] Flame detected → Emergency siren. WiFi alert sent!');
+  }
+
+  // ── RFID ─────────────────────────────────────────────────────
+  function scanRFID(type) {
+    const res = document.getElementById('rfidResult');
+    res.style.display = 'block';
+    if (type === 'auth') {
+      armed = !armed;
+      res.className = 'rfid-result granted';
+      const uid = 'A1 B2 C3 D4';
+      if (armed) {
+        res.textContent = `✓ ACCESS GRANTED · UID: ${uid} · System ARMED`;
+        clearAll();
+        addLog('RFID', 'tag-rfid', `[UID:${uid}] Authorized card → System ARMED.`);
+      } else {
+        res.textContent = `✓ ACCESS GRANTED · UID: ${uid} · System DISARMED`;
+        setBuzzer(false);
+        setLED('blue', 'DISARMED');
+        setLCD('✓ ACCESS OK     ', ' SYSTEM DISARMED');
+        setStatus('DISARMED', 'var(--blue)');
+        addLog('RFID', 'tag-rfid', `[UID:${uid}] Authorized card → System DISARMED.`);
+      }
+    } else {
+      res.className = 'rfid-result denied';
+      const uid = 'DE AD BE EF';
+      res.textContent = `✗ ACCESS DENIED · UID: ${uid} · Unknown card`;
+      setLCD(' ACCESS DENIED! ', uid);
+      setBuzzer(true, 'DENY TONE');
+      setLED('red', 'DENIED');
+      addLog('RFID', 'tag-rfid', `[UID:${uid}] UNAUTHORIZED card → Alarm triggered.`);
+      setTimeout(() => {
+        setBuzzer(false);
+        if (armed) { setLED('green','SAFE'); setLCD('✓ SYSTEM  SAFE ✓','  ARMED & READY  '); }
+      }, 2500);
+    }
+    setTimeout(() => { res.style.display = 'none'; }, 3500);
+  }
+
+  // ── Animate gas bar in idle ───────────────────────────────────
+  setInterval(() => {
+    const mq2Card = document.getElementById('mq2Card');
+    if (mq2Card.classList.contains('alert')) return;
+    const v = 110 + Math.floor(Math.random() * 60);
+    document.getElementById('mq2Val').textContent = v;
+    document.getElementById('gasBar').style.width = ((v/4095)*100).toFixed(1) + '%';
+  }, 2000);
+
+  // ── Startup log ──────────────────────────────────────────────
+  addLog('SYSTEM', 'tag-system', 'ESP32 booted. All sensors initialized. WiFi connected.');
+  addLog('RFID', 'tag-rfid', 'RC522 initialized. Awaiting card scan.');
+  addLog('SYSTEM', 'tag-system', 'Startup sequence complete. System ARMED.');
+</script>
+</body>
+</html>
